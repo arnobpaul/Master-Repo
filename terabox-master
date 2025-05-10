@@ -1,0 +1,224 @@
+
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request));
+});
+
+// === Config ===a
+const BOT_TOKEN = 'your_bot_token_here';
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const ADMIN_ID = 1702305802; // Replace with your Telegram user ID
+const CHANNEL_USERNAME = '@your_channel_username'; // Replace with your channel username
+const USERS = new Set(); // Temporary in-memory storage
+
+// === Main handler ===
+async function handleRequest(request) {
+  if (request.method === 'POST') {
+    try {
+      const update = await request.json();
+
+      if (update.message) {
+        await processMessage(update.message);
+      } else if (update.callback_query) {
+        await processCallbackQuery(update.callback_query);
+      }
+
+      return new Response('OK', { status: 200 });
+    } catch (error) {
+      console.error('Error in handleRequest:', error);
+      return new Response(`Error: ${error.message}`, { status: 500 });
+    }
+  } else {
+    return new Response('Send POST requests to this endpoint.', { status: 200 });
+  }
+}
+
+// === Process incoming messages ===
+async function processMessage(message) {
+  const chatId = message.chat.id;
+  const userId = message.from.id;
+  const messageId = message.message_id;
+
+  USERS.add(userId); // Track user
+
+  if (!(await isUserSubscribed(userId))) {
+    await sendForceSubscribeMessage(chatId, messageId);
+    return;
+  }
+
+  if (message.text?.startsWith('/broadcast')) {
+    await handleBroadcast(message);
+    return;
+  }
+
+  if (message.text?.startsWith('/start')) {
+    await sendChannelJoinMessage(chatId, messageId);
+    return;
+  }
+
+  if (message.text?.startsWith('http')) {
+    await handleTeraboxLink(message, messageId);
+  } else if (message.text) {
+    await sendMessage(chatId, 'Please send me a valid link.', messageId);
+  }
+}
+
+// === Check if user is subscribed ===
+async function isUserSubscribed(userId) {
+  const response = await fetch(`${TELEGRAM_API}/getChatMember?chat_id=${CHANNEL_USERNAME}&user_id=${userId}`);
+  const result = await response.json();
+  if (result.ok) {
+    const status = result.result.status;
+    return status === 'member' || status === 'administrator' || status === 'creator';
+  }
+  return false;
+}
+
+// === Send force subscribe message ===
+async function sendForceSubscribeMessage(chatId, messageId) {
+  const inlineKeyboard = [
+    [{ text: 'Join Channel ✅', url: `https://t.me/${CHANNEL_USERNAME.replace('@', '')}` }]
+  ];
+  await sendMessage(
+    chatId,
+    '⚠ You must join our channel to use this bot.\n\nClick the button below to join:',
+    messageId,
+    { inline_keyboard: inlineKeyboard }
+  );
+}
+
+// === Broadcast command (admin only) ===
+async function handleBroadcast(message) {
+  const fromId = message.from.id;
+  const chatId = message.chat.id;
+  const text = message.text;
+
+  if (fromId !== ADMIN_ID) {
+    await sendMessage(chatId, '❌ You are not authorized to use this command.');
+    return;
+  }
+
+  const broadcastText = text.replace('/broadcast', '').trim();
+
+  if (!broadcastText) {
+    await sendMessage(chatId, '⚠ Please provide a message to broadcast.\nExample: /broadcast Hello users!');
+    return;
+  }
+
+  let success = 0, fail = 0;
+
+  for (let userId of USERS) {
+    try {
+      await sendMessage(userId, broadcastText);
+      success++;
+      await delay(50); // Rate limit (50ms delay to avoid hitting Telegram's rate limit)
+    } catch (e) {
+      console.error('Broadcast error:', e);
+      fail++;
+    }
+  }
+
+  await sendMessage(chatId, `✅ Broadcast complete.\nSent: ${success}\nFailed: ${fail}`);
+}
+
+// === Handle callback button ===
+async function processCallbackQuery(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+  const messageId = callbackQuery.message.message_id;
+
+  if (callbackQuery.data === 'join') {
+    await sendMessage(chatId, '🔓 Success! You are verified. 🔓\n\nSend me a Terabox link.', messageId);
+  }
+}
+
+// === Welcome message with buttons ===
+async function sendChannelJoinMessage(chatId, messageId) {
+  const inlineKeyboard = [
+    [
+      { text: 'Join Channel ✅', url: `https://t.me/${CHANNEL_USERNAME.replace('@', '')}` },
+      { text: 'Developer ✅', url: 'https://t.me/Thoryxff' }
+    ],
+    [{ text: '🔓 Joined 🔓', callback_data: 'join' }]
+  ];
+
+  await sendMessage(
+    chatId,
+    '⚡ Welcome to the Terabox Video Downloader Bot ⚡!\n\n⚡ Click the buttons below to join and use the bot. ⚡',
+    messageId,
+    { inline_keyboard: inlineKeyboard }
+  );
+}
+
+// === Handle valid Terabox links ===
+async function handleTeraboxLink(message, messageId) {
+  const chatId = message.chat.id;
+  const teraboxUrl = message.text;
+
+  // Updated Terabox URL pattern
+  const teraboxUrlPattern = /^https:\/\/(www\.)?terabox\.com\/s\/[A-Za-z0-9_-]+/;
+  if (!teraboxUrl.match(teraboxUrlPattern)) {
+    console.error('Invalid Terabox link:', teraboxUrl); // Log the invalid link
+    await sendMessage(chatId, '❌ Invalid Terabox link. Please send a correct one.', messageId);
+    return;
+  }
+
+  const processingMessage = await sendMessage(chatId, '🔎 Processing URL...', messageId);
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await deleteMessage(chatId, processingMessage.message_id);
+
+  const apiUrl = `https://tera-api-thory.vercel.app/api?api_key=lifetime&url=${encodeURIComponent(teraboxUrl)}`;
+  const inlineKeyboard = [
+    [
+      { text: 'Play In Server 1', web_app: { url: apiUrl } },
+      { text: 'Play In Server 2', web_app: { url: apiUrl } }
+    ]
+  ];
+
+  await sendMessage(chatId, '📺 Your video is ready 🎥\n\nPlease choose a button to play:', messageId, { inline_keyboard: inlineKeyboard });
+}
+
+// === Send Telegram message ===
+async function sendMessage(chatId, text, replyMessageId = null, replyMarkup = null) {
+  try {
+    const body = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'HTML',
+      reply_to_message_id: replyMessageId,
+      reply_markup: replyMarkup ? replyMarkup : undefined
+    };
+
+    const response = await fetch(`${TELEGRAM_API}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error in sendMessage:', error);
+    throw error;
+  }
+}
+
+// === Delete message ===
+async function deleteMessage(chatId, messageId) {
+  try {
+    const body = {
+      chat_id: chatId,
+      message_id: messageId
+    };
+
+    await fetch(`${TELEGRAM_API}/deleteMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    console.error('Error in deleteMessage:', error);
+  }
+}
+
+// === Rate limiting utility ===
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
