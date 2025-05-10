@@ -1,0 +1,173 @@
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request));
+});
+
+// === Config ===
+const BOT_TOKEN = '8157270574:AAGOL4uy4YX8OMCMOxk3I5HnZ9EcKKxHEHU';
+const TELEGRAM_API = https://api.telegram.org/bot${BOT_TOKEN};
+const ADMIN_ID = 1702305802; // Replace with your own Telegram user ID
+const USERS = new Set(); // Temporary in-memory storage
+
+// === Main handler ===
+async function handleRequest(request) {
+  if (request.method === 'POST') {
+    try {
+      const update = await request.json();
+
+      if (update.message) {
+        await processMessage(update.message);
+      } else if (update.callback_query) {
+        await processCallbackQuery(update.callback_query);
+      }
+
+      return new Response('OK', { status: 200 });
+    } catch (error) {
+      return new Response(Error: ${error.message}, { status: 500 });
+    }
+  } else {
+    return new Response('Send POST requests to this endpoint.', { status: 200 });
+  }
+}
+
+// === Process incoming messages ===
+async function processMessage(message) {
+  const chatId = message.chat.id;
+  const userId = message.from.id;
+  const messageId = message.message_id;
+
+  USERS.add(userId); // Track user
+
+  if (message.text?.startsWith('/broadcast')) {
+    await handleBroadcast(message);
+    return;
+  }
+
+  if (message.text?.startsWith('/start')) {
+    await sendChannelJoinMessage(chatId, messageId);
+    return;
+  }
+
+  if (message.text?.startsWith('http')) {
+    await handleTeraboxLink(message, messageId);
+  } else if (message.text) {
+    await sendMessage(chatId, 'Please send me a valid link.', messageId);
+  }
+}
+
+// === Broadcast command (admin only) ===
+async function handleBroadcast(message) {
+  const fromId = message.from.id;
+  const chatId = message.chat.id;
+  const text = message.text;
+
+  if (fromId !== ADMIN_ID) {
+    await sendMessage(chatId, '❌ You are not authorized to use this command.');
+    return;
+  }
+
+  const broadcastText = text.replace('/broadcast', '').trim();
+
+  if (!broadcastText) {
+    await sendMessage(chatId, '⚠ Please provide a message to broadcast.\nExample: /broadcast Hello users!');
+    return;
+  }
+
+  let success = 0, fail = 0;
+
+  for (let userId of USERS) {
+    try {
+      await sendMessage(userId, broadcastText);
+      success++;
+    } catch (e) {
+      fail++;
+    }
+  }
+
+  await sendMessage(chatId, ✅ Broadcast complete.\nSent: ${success}\nFailed: ${fail});
+}
+
+// === Handle callback button ===
+async function processCallbackQuery(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+  const messageId = callbackQuery.message.message_id;
+
+  if (callbackQuery.data === 'join') {
+    await sendMessage(chatId, '🔓🔓Success! You Are Verified🔓🔓\n\nSend Me Terabox Link ', messageId);
+  }
+}
+
+// === Welcome message with buttons ===
+async function sendChannelJoinMessage(chatId, messageId) {
+  const inlineKeyboard = [
+    [
+      { text: 'Join Channel✅', url: 'https://t.me/thbots1' },
+      { text: 'Developer✅', url: 'https://t.me/Thoryxff' }
+    ],
+    [
+      { text: '🔓Joined🔓', callback_data: 'join' }
+    ]
+  ];
+
+  await sendMessage(chatId, '⚡Welcome to the Terabox Video Downloader Bot⚡!\n\n⚡Click buttons below to join and use the bot.⚡', messageId, { inline_keyboard: inlineKeyboard });
+}
+
+// === Handle valid Terabox links ===
+async function handleTeraboxLink(message, messageId) {
+  const chatId = message.chat.id;
+  const teraboxUrl = message.text;
+
+  const teraboxUrlPattern = /^https:\/\/.*terabox\.com\/s\/[A-Za-z0-9]+/;
+  if (!teraboxUrl.match(teraboxUrlPattern)) {
+    await sendMessage(chatId, '❌ Invalid Terabox link. Please send a correct one.', messageId);
+    return;
+  }
+
+  const processingMessage = await sendMessage(chatId, '🔎 Processing URL...', messageId);
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await deleteMessage(chatId, processingMessage.message_id);
+
+  const apiUrl = https://tera-api-thory.vercel.app/api?api_key=lifetime&url=${encodeURIComponent(teraboxUrl)};
+  const inlineKeyboard = [
+    [
+      { text: 'Play In Server 1', web_app: { url: apiUrl } }
+    ],
+    [
+      { text: 'Play In Server 2', web_app: { url: apiUrl } }
+    ]
+  ];
+
+  await sendMessage(chatId, '📺 Your video is ready 🎥\n\nPlease choose a button to play:', messageId, { inline_keyboard: inlineKeyboard });
+}
+
+// === Send Telegram message ===
+async function sendMessage(chatId, text, replyMessageId = null, replyMarkup = null) {
+  const body = {
+    chat_id: chatId,
+    text: text,
+    parse_mode: 'HTML',
+    reply_to_message_id: replyMessageId,
+    reply_markup: replyMarkup ? replyMarkup : undefined
+  };
+
+  const response = await fetch(${TELEGRAM_API}/sendMessage, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  return await response.json();
+}
+
+// === Delete message ===
+async function deleteMessage(chatId, messageId) {
+  const body = {
+    chat_id: chatId,
+    message_id: messageId
+  };
+
+  await fetch(${TELEGRAM_API}/deleteMessage, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+}
